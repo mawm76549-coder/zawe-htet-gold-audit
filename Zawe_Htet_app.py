@@ -5,9 +5,14 @@ import os
 import google.generativeai as genai
 from PIL import Image
 import json
+import io
 
 # စာမျက်နှာ အကျယ်ချဲ့ခြင်းနှင့် Page Config
-st.set_page_config(page_title="ဇွဲထက် ရွှေဆိုင် စာရင်းစစ်စနစ်", layout="wide", page_icon="🪙")
+st.set_page_config(
+    page_title="ဇွဲထက် ရွှေဆိုင် - Master Audit Workflow V7.2 (Excel Multi-sheet)",
+    layout="wide",
+    page_icon="💎"
+)
 
 # --- 🎨 Custom CSS Styling ---
 st.markdown("""
@@ -71,46 +76,73 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ရွှေချိန်တွက်ချက်မှု ဖန်ရှင်များ
-def to_rupe(kyat, pae, yway):
-    return (int(kyat) * 128) + (int(pae) * 8) + int(yway)
+# 🗂️ Master Categories & Sub-categories Structure
+CATEGORY_STRUCTURE = {
+    "စိန်": {
+        "-": ["နားကပ်", "လက်စွပ်", "ဆွဲသီး", "လက်ကောက်", "ဟန်ချိန်း", "ဘယက်", "ရတီနားကပ်", "ရတီလက်စွပ်"]
+    },
+    "ရွှေ": {
+        "၁၅ ပဲရည်": ["လက်စွပ်", "လက်ကောက်", "ဆွဲကြိုး", "နားကပ်", "ဆွဲသီး", "ဟန်ချိန်း", "ကလစ်"],
+        "၁၆ ပဲရည်": ["လက်ကောက်", "လက်စွပ်", "ဆွဲကြိုး", "နားကပ်", "ဆွဲသီး", "ဟန်ချိန်း", "ဖိချူး", "cut eye", "ရွှေတွဲအပ်", "ချိတ်"]
+    },
+    "ပလက်တီနမ်": {
+        "-": ["ဆွဲကြိုး", "ဟန်ချိန်း", "လက်စွပ်", "ဆွဲသီး", "နားကပ်", "ချိတ်", "cut eye"]
+    }
+}
 
-def from_rupe(total_yway):
-    total_yway = int(total_yway)
-    kyat = total_yway // 128
-    remainder = total_yway % 128
-    pae = remainder // 8
-    yway = remainder % 8
-    return kyat, pae, yway
+def get_all_category_rows():
+    rows = []
+    for main_cat, sub_dict in CATEGORY_STRUCTURE.items():
+        for sub_cat, items in sub_dict.items():
+            for item in items:
+                rows.append({
+                    "အဓိကအမျိုးအစား": main_cat,
+                    "ခွဲအမျိုးအစား": sub_cat,
+                    "ပစ္စည်းအမည်": item
+                })
+    return rows
 
-def format_weight(kyat, pae, yway):
-    return f"{kyat} ကျပ် ၊ {pae} ပဲ ၊ {yway} ရွဲ"
+# --- Session State စတင်သတ်မှတ်ခြင်း ---
+if "opening_stock_df" not in st.session_state:
+    init_rows = get_all_category_rows()
+    for r in init_rows:
+        r["မနက်လက်ကျန် (အရေအတွက်)"] = 0
+        r["ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"] = 0
+    st.session_state.opening_stock_df = pd.DataFrame(init_rows)
 
-# Session State စတင်သတ်မှတ်ခြင်း
-if "sales_list" not in st.session_state:
-    st.session_state.sales_list = []
 if "inflow_list" not in st.session_state:
     st.session_state.inflow_list = []
+
+if "sales_list" not in st.session_state:
+    st.session_state.sales_list = []
+
 if "admin_password" not in st.session_state:
     st.session_state.admin_password = "zwehtet2026"
 
-# Header
+if "flash_msg" not in st.session_state:
+    st.session_state.flash_msg = None
+
+if st.session_state.flash_msg:
+    st.toast(st.session_state.flash_msg)
+    st.session_state.flash_msg = None
+
+# --- Header ---
 col_title, col_date = st.columns([3, 1])
 with col_title:
-    st.title("🪙 ဇွဲထက် ရွှေဆိုင် - စာရင်းစစ်စနစ် (Enterprise V6 Pro)")
-    st.caption("✨ AI စနစ်သုံး ဘောက်ချာဖတ်ခြင်း၊ လုံခြုံသော စာရင်းစစ်စနစ်နှင့် အမှားရှာဖွေရေး")
+    st.title("💎 ဇွဲထက် ရွှေဆိုင် - စာရင်းစစ်နှင့် လက်ကျန်ထိန်းချုပ်ရေးစနစ် (V7.2)")
+    st.caption("✨ စိန် ၊ ရွှေ (၁၅/၁၆ပဲရည်) ၊ ပလက်တီနမ် ၊ ပန်းထိမ်ဆရာ အဝင်နှင့် Excel Multi-sheet Report စနစ်")
 with col_date:
     audit_date = st.date_input("📅 စာရင်းစစ်သည့် ရက်စွဲ", date.today(), key="audit_date_main")
 
 st.markdown("---")
 
-# --- Sidebar (Settings, API Key & Secure Founder Login Mode) ---
+# --- Sidebar ---
 with st.sidebar:
     st.subheader("⚙️ ဆက်တင်များ (Settings)")
-    shop_owner = st.text_input("တာဝန်ခံ အမည် (Auditor)", value="ကိုအောင်နိုင်ဦး", key="shop_owner_name")
+    shop_owner = st.text_input("တာဝန်ခံဝန်ထမ်း အမည် (Auditor)", value="ကိုအောင်နိုင်ဦး", key="shop_owner_name")
     
     st.markdown("---")
-    st.subheader("🤖 Gemini AI API")
+    st.subheader("🤖 Gemini AI API (OCR)")
     gemini_api_key = st.text_input("Gemini API Key ထည့်ပါ", type="password", key="gemini_api_key")
     if gemini_api_key:
         genai.configure(api_key=gemini_api_key)
@@ -118,7 +150,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🔐 Founder / Admin လုံခြုံရေး")
     
-    # 🔒 Password ပြောင်းလဲသည့် အပိုင်း (Old Password စစ်ဆေးခြင်း)
     with st.expander("⚙️ Admin Password ပြောင်းရန်"):
         old_pass_input = st.text_input("Password အဟောင်း ထည့်ပါ", type="password", key="old_pass_input")
         new_pass_input = st.text_input("Password အသစ် ထည့်ပါ", type="password", key="new_pass_input")
@@ -128,291 +159,470 @@ with st.sidebar:
             if old_pass_input == st.session_state.admin_password:
                 if new_pass_input and new_pass_input == confirm_pass_input:
                     st.session_state.admin_password = new_pass_input
-                    st.success("✅ Password အဟောင်းကို ပယ်ဖျက်ပြီး Password အသစ်သို့ အောင်မြင်စွာ ပြောင်းလဲပြီးပါပြီ။")
+                    st.success("✅ Password အသစ်သို့ အောင်မြင်စွာ ပြောင်းလဲပြီးပါပြီ။")
                 else:
                     st.error("❌ Password အသစ်နှစ်ခု မတူညီပါ သို့မဟုတ် ကွက်လပ်ဖြစ်နေပါသည်။")
             else:
                 st.error("❌ Password အဟောင်း မှားယွင်းနေပါသည်။")
 
     st.markdown("---")
-    st.subheader("🔑 Admin ဝင်ရန်")
+    st.subheader("🔑 Admin / Founder ဝင်ရန်")
     input_pass = st.text_input("Admin Password ရိုက်ပါ", type="password", key="login_pass_input")
     
     is_founder = False
     if input_pass:
         if input_pass == st.session_state.admin_password:
             is_founder = True
-            st.success("✅ Admin အဖြစ် ဝင်ရောက်ပြီးပါပြီ။")
+            st.success("✅ Founder / Admin အဖြစ် ဝင်ရောက်ပြီးပါပြီ။")
         else:
-            st.error("❌ Incorrect Password! စကားဝှက် မှားယွင်းနေပါသည်။")
+            st.error("❌ စကားဝှက် မှားယွင်းနေပါသည်။")
 
-# --- အပိုင်း (၁) မနက်ခင်း ဖွင့်ပွဲလက်ကျန် ---
-st.subheader("☀️ ၁။ မနက်ခင်း ဖွင့်ပွဲလက်ကျန် (Opening Stock)")
-op_col1, op_col2, op_col3, op_col4 = st.columns(4)
-with op_col1:
-    op_k = st.number_input("ကျပ်သား (မနက်)", min_value=0, value=0, key="op_k")
-with op_col2:
-    op_p = st.number_input("ပဲ (မနက်)", min_value=0, max_value=15, value=0, key="op_p")
-with op_col3:
-    op_y = st.number_input("ရွဲ (မနက်)", min_value=0, max_value=7, value=0, key="op_y")
-with op_col4:
-    op_items = st.number_input("အထည် အရေအတွက် (မနက်)", min_value=0, value=0, key="op_items")
+def render_category_selector(prefix):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        main_cat = st.selectbox("၁။ အဓိက ခေါင်းစဉ်ကြီး", ["စိန်", "ရွှေ", "ပလက်တီနမ်"], key=f"{prefix}_main_cat")
+    with c2:
+        if main_cat == "ရွှေ":
+            sub_cat = st.selectbox("၂။ ရွှေ အမျိုးအစားခွဲ", ["၁၅ ပဲရည်", "၁၆ ပဲရည်"], key=f"{prefix}_sub_cat")
+        else:
+            st.selectbox("၂။ အမျိုးအစားခွဲ", ["-"], disabled=True, key=f"{prefix}_sub_cat_disabled")
+            sub_cat = "-"
+    with c3:
+        item_list = CATEGORY_STRUCTURE[main_cat][sub_cat]
+        item_name = st.selectbox("၃။ ပစ္စည်း အမျိုးအမည်", item_list, key=f"{prefix}_item_name")
+    return main_cat, sub_cat, item_name
+
+op_col_config = {
+    "ပစ္စည်းအမည်": st.column_config.TextColumn("ပစ္စည်းအမည်", disabled=True),
+    "မနက်လက်ကျန် (အရေအတွက်)": st.column_config.NumberColumn("မနက်လက်ကျန် (အရေအတွက်)", min_value=0, step=1, required=True, default=0)
+}
+act_col_config = {
+    "ပစ္စည်းအမည်": st.column_config.TextColumn("ပစ္စည်းအမည်", disabled=True),
+    "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)": st.column_config.NumberColumn("ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)", min_value=0, step=1, required=True, default=0)
+}
+
+# ==========================================
+# အပိုင်း (၁) မနက်ခင်း ဖွင့်ပွဲလက်ကျန် (Opening Stock)
+# ==========================================
+st.subheader("☀️ ၁။ မနက်ခင်း ဖွင့်ပွဲလက်ကျန် စာရင်းထည့်သွင်းရန် (Opening Stock)")
+
+tab_op1, tab_op2, tab_op3 = st.tabs(["💎 စိန် (Diamond)", "🪙 ရွှေ (၁၅ ပဲရည် / ၁၆ ပဲရည်)", "⚪ ပလက်တီနမ် (Platinum)"])
+
+with tab_op1:
+    sein_mask = st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "စိန်"
+    edited_sein_op = st.data_editor(
+        st.session_state.opening_stock_df[sein_mask][["ပစ္စည်းအမည်", "မနက်လက်ကျန် (အရေအတွက်)"]],
+        column_config=op_col_config, hide_index=True, use_container_width=True, key="editor_op_sein"
+    )
+    st.session_state.opening_stock_df.loc[sein_mask, "မနက်လက်ကျန် (အရေအတွက်)"] = edited_sein_op["မနက်လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
+
+with tab_op2:
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown("**🔸 ၁၅ ပဲရည် မနက်လက်ကျန်**")
+        g15_mask = (st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "ရွှေ") & (st.session_state.opening_stock_df["ခွဲအမျိုးအစား"] == "၁၅ ပဲရည်")
+        edited_g15_op = st.data_editor(
+            st.session_state.opening_stock_df[g15_mask][["ပစ္စည်းအမည်", "မနက်လက်ကျန် (အရေအတွက်)"]],
+            column_config=op_col_config, hide_index=True, use_container_width=True, key="editor_op_g15"
+        )
+        st.session_state.opening_stock_df.loc[g15_mask, "မနက်လက်ကျန် (အရေအတွက်)"] = edited_g15_op["မနက်လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
+    with g2:
+        st.markdown("**🔸 ၁၆ ပဲရည် မနက်လက်ကျန်**")
+        g16_mask = (st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "ရွှေ") & (st.session_state.opening_stock_df["ခွဲအမျိုးအစား"] == "၁၆ ပဲရည်")
+        edited_g16_op = st.data_editor(
+            st.session_state.opening_stock_df[g16_mask][["ပစ္စည်းအမည်", "မနက်လက်ကျန် (အရေအတွက်)"]],
+            column_config=op_col_config, hide_index=True, use_container_width=True, key="editor_op_g16"
+        )
+        st.session_state.opening_stock_df.loc[g16_mask, "မနက်လက်ကျန် (အရေအတွက်)"] = edited_g16_op["မနက်လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
+
+with tab_op3:
+    plat_mask = st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "ပလက်တီနမ်"
+    edited_plat_op = st.data_editor(
+        st.session_state.opening_stock_df[plat_mask][["ပစ္စည်းအမည်", "မနက်လက်ကျန် (အရေအတွက်)"]],
+        column_config=op_col_config, hide_index=True, use_container_width=True, key="editor_op_plat"
+    )
+    st.session_state.opening_stock_df.loc[plat_mask, "မနက်လက်ကျန် (အရေအတွက်)"] = edited_plat_op["မနက်လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
 
 st.markdown("---")
 
-# --- အပိုင်း (၂) အဝင် / အရောင်းဘောက်ချာ (Manual & AI OCR) ---
+# ==========================================
+# အပိုင်း (၂) ပန်းထိမ်ဆရာ အဝင် & အရောင်းစာရင်း (Inflow & Sales)
+# ==========================================
 col_in, col_out = st.columns(2)
 
 with col_in:
-    st.subheader("📥 ၂။ ပစ္စည်းအသစ် အဝင်ထည့်ရန် (Inflow)")
+    st.subheader("📥 ၂။ ပန်းထိမ်ဆရာ ပစ္စည်းအဝင်စာရင်း (Artisan Inflow)")
+    in_main_cat, in_sub_cat, in_item_name = render_category_selector("inflow")
+    
     with st.form("inflow_form", clear_on_submit=True):
-        in_name = st.text_input("ပစ္စည်း အမျိုးအစား / မှတ်ချက်", key="in_name_input")
-        ic1, ic2 = st.columns(2)
-        in_qty = ic1.number_input("အထည် အရေအတွက်", min_value=0, value=0, key="in_qty_input")
-        c1, c2, c3 = st.columns(3)
-        in_k = c1.number_input("ကျပ်သား", min_value=0, value=0, key="in_k_input")
-        in_p = c2.number_input("ပဲ", min_value=0, max_value=15, value=0, key="in_p_input")
-        in_y = c3.number_input("ရွဲ", min_value=0, max_value=7, value=0, key="in_y_input")
-        submit_in = st.form_submit_button("➕ အဝင်စာရင်း ထည့်မည်")
+        f_in1, f_in2 = st.columns(2)
+        artisan_name = f_in1.text_input("👨‍🎨 ပန်းထိမ်ဆရာ နာမည် *", placeholder="ဥပမာ - ဆရာဦးကျော်")
+        in_code = f_in2.text_input("🏷️ ပစ္စည်း Code နံပါတ်", placeholder="ဥပမာ - D-001")
         
+        f_in3, f_in4 = st.columns(2)
+        in_qty = f_in3.number_input("အဝင် အရေအတွက် *", min_value=1, value=1, step=1)
+        in_note = f_in4.text_input("မှတ်ချက်", placeholder="မှတ်ချက်")
+        
+        submit_in = st.form_submit_button("➕ ပန်းထိမ်ဆရာ အဝင်စာရင်း ထည့်မည်")
         if submit_in:
-            if in_k == 0 and in_p == 0 and in_y == 0 and in_qty == 0:
-                st.warning("အချက်အလက် ထည့်သွင်းပေးပါ!")
+            if not artisan_name.strip():
+                st.warning("⚠️ ပန်းထိမ်ဆရာ နာမည်ကို ထည့်သွင်းပေးပါ!")
             else:
                 st.session_state.inflow_list.append({
+                    "id": len(st.session_state.inflow_list) + 1,
                     "ရက်စွဲ": str(audit_date),
-                    "အမျိုးအစား": "အဝင် (Inflow)",
-                    "ဘောက်ချာ/မှတ်ချက်": in_name if in_name else "ပစ္စည်းအသစ်",
-                    "အရေအတွက်": in_qty,
-                    "ကျပ်သား": in_k, "ပဲ": in_p, "ရွဲ": in_y,
-                    "total_r": to_rupe(in_k, in_p, in_y),
+                    "ပရိန်ဆရာအမည်": artisan_name.strip(),
+                    "Code နံပါတ်": in_code.strip() if in_code.strip() else "-",
+                    "အဓိကအမျိုးအစား": in_main_cat,
+                    "ခွဲအမျိုးအစား": in_sub_cat,
+                    "ပစ္စည်းအမည်": in_item_name,
+                    "အရေအတွက်": int(in_qty),
+                    "မှတ်ချက်": in_note.strip() if in_note.strip() else "-",
                     "status": "ACTIVE"
                 })
+                st.session_state.flash_msg = f"✅ ပန်းထိမ်ဆရာ '{artisan_name.strip()}' ၏ အဝင်စာရင်း သိမ်းဆည်းပြီးပါပြီ။"
+                st.rerun()
 
     if st.session_state.inflow_list:
-        display_in = [i for i in st.session_state.inflow_list if i["status"] == "ACTIVE"]
-        if display_in:
-            st.dataframe(pd.DataFrame(display_in).drop(columns=["total_r", "status"], errors="ignore"), use_container_width=True)
+        st.markdown("**📋 ယနေ့ ပန်းထိမ်ဆရာ အဝင် မှတ်တမ်းများ**")
+        st.dataframe(pd.DataFrame(st.session_state.inflow_list), use_container_width=True, hide_index=True)
+        active_in_ids = [i["id"] for i in st.session_state.inflow_list if i["status"] == "ACTIVE"]
+        if active_in_ids:
+            v_in_col1, v_in_col2 = st.columns([2, 1])
+            void_in_id = v_in_col1.selectbox("ပယ်ဖျက်မည့် အဝင် ID", active_in_ids, key="void_in_select")
+            if v_in_col2.button("⚠️ အဝင် Void", key="void_in_btn"):
+                for item in st.session_state.inflow_list:
+                    if item["id"] == void_in_id:
+                        item["status"] = "VOIDED"
+                        item["အရေအတွက်"] = 0
+                st.session_state.flash_msg = f"✅ အဝင် ID #{void_in_id} ကို Void လုပ်ပြီးပါပြီ။"
+                st.rerun()
 
 with col_out:
-    st.subheader("📤 ၃။ အရောင်းဘောက်ချာ ထည့်ရန် & ပယ်ဖျက်ခြင်း (Void)")
+    st.subheader("📤 ၃။ အရောင်းစာရင်းသွင်းရန် & Void (Sales)")
     
-    # 📸 AI OCR Voucher Scanner
-    with st.expander("📸 Gemini AI ဖြင့် ဘောက်ချာဓာတ်ပုံဖတ်ရန် (OCR)"):
-        uploaded_voucher = st.file_uploader("ဘောက်ချာဓာတ်ပုံ တင်ပါ", type=["jpg", "png", "jpeg"], key="voucher_file")
-        ocr_v_no = ""
-        ocr_type = "လက်စွပ်"
-        ocr_qty = 0
-        ocr_k = 0
-        ocr_p = 0
-        ocr_y = 0
-        
+    with st.expander("📸 Gemini AI ဖြင့် အရောင်းဘောက်ချာ ဖတ်ရန် (OCR)"):
+        uploaded_voucher = st.file_uploader("ဘောက်ချာပုံ တင်ပါ", type=["jpg", "png", "jpeg"], key="ocr_uploader")
         if uploaded_voucher and gemini_api_key:
             if st.button("🔍 AI ဖြင့် ဘောက်ချာဖတ်မည်"):
                 try:
                     img = Image.open(uploaded_voucher)
                     model = genai.GenerativeModel("gemini-1.5-flash")
                     prompt = """
-                    You are an assistant for a Myanmar gold shop. Extract details from this voucher image:
-                    - voucher_no (string)
-                    - item_type (one of: လက်စွပ်, ဆွဲကြိုး, လက်ကောက်, နားကပ်, ဆွဲသီး, အခြား)
-                    - quantity (integer)
-                    - kyat (integer)
-                    - pae (integer)
-                    - yway (integer)
-                    Output strictly valid JSON with keys: voucher_no, item_type, quantity, kyat, pae, yway.
+                    Extract sales voucher info in valid JSON: voucher_no, item_code, main_category (စိန်, ရွှေ, ပလက်တီနမ်), sub_category (-, ၁၅ ပဲရည်, ၁၆ ပဲရည်), item_name, quantity
                     """
                     response = model.generate_content([prompt, img])
-                    res_text = response.text.replace("```json", "").replace("```", "").strip()
-                    extracted_data = json.loads(res_text)
+                    clean_json = response.text.replace("```json", "").replace("```", "").strip()
+                    data = json.loads(clean_json)
+                    
+                    m_c = data.get("main_category", "ရွှေ")
+                    s_c = data.get("sub_category", "၁၆ ပဲရည်" if m_c == "ရွှေ" else "-")
+                    i_n = data.get("item_name", "လက်စွပ်")
                     
                     st.session_state.sales_list.append({
                         "id": len(st.session_state.sales_list) + 1,
                         "ရက်စွဲ": str(audit_date),
-                        "အမျိုးအစား": f"အရောင်း ({extracted_data.get('item_type', 'လက်စွပ်')})",
-                        "ဘောက်ချာ/မှတ်ချက်": extracted_data.get('voucher_no', 'AI-SCAN'),
-                        "အရေအတွက်": int(extracted_data.get('quantity', 1)),
-                        "ကျပ်သား": int(extracted_data.get('kyat', 0)),
-                        "ပဲ": int(extracted_data.get('pae', 0)),
-                        "ရွဲ": int(extracted_data.get('yway', 0)),
-                        "total_r": to_rupe(int(extracted_data.get('kyat', 0)), int(extracted_data.get('pae', 0)), int(extracted_data.get('yway', 0))),
+                        "ဘောက်ချာနံပါတ်": data.get("voucher_no", "AI-VOUCHER"),
+                        "Code နံပါတ်": data.get("item_code", "AI-CODE"),
+                        "အဓိကအမျိုးအစား": m_c,
+                        "ခွဲအမျိုးအစား": s_c,
+                        "ပစ္စည်းအမည်": i_n,
+                        "အရေအတွက်": int(data.get("quantity", 1)),
+                        "မှတ်ချက်": "AI OCR Scan",
                         "status": "ACTIVE"
                     })
-                    st.success("✅ AI က ဘောက်ချာဖတ်ပြီး စာရင်းထဲသို့ တိုက်ရိုက် ထည့်သွင်းပေးလိုက်ပါပြီ။")
+                    st.session_state.flash_msg = "✅ AI ဖြင့် ဘောက်ချာဖတ်ပြီးပါပြီ။"
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ AI ဖတ်ရာတွင် အမှားဖြစ်ပေါ်ပါသည် - {str(e)}")
+                    st.error(f"❌ အမှားဖြစ်ပေါ်ပါသည်: {e}")
 
-    # Manual Form
+    sale_main_cat, sale_sub_cat, sale_item_name = render_category_selector("sales")
+    
     with st.form("sales_form", clear_on_submit=True):
-        f1, f2 = st.columns(2)
-        v_no = f1.text_input("ဘောက်ချာ နံပါတ်", value="", key="sales_v_no")
-        item_type = f2.selectbox("ရွှေထည် အမျိုးအစား", ["လက်စွပ်", "ဆွဲကြိုး", "လက်ကောက်", "နားကပ်", "ဆွဲသီး", "အခြား"], key="sales_item_type")
-        sc1, sc2, sc3 = st.columns(3)
-        sale_qty = sc1.number_input("အထည် အရေအတွက်", min_value=0, value=0, key="sale_qty_input")
-        s_k = sc2.number_input("ကျပ်သား", min_value=0, value=0, key="sale_k_input")
-        s_p = sc3.number_input("ပဲ", min_value=0, max_value=15, value=0, key="sale_p_input")
-        s_y = sc3.number_input("ရွဲ", min_value=0, max_value=7, value=0, key="sale_y_input")
-        submit_sale = st.form_submit_button("➕ အရောင်းဘောက်ချာ ထည့်မည်")
+        f_s1, f_s2 = st.columns(2)
+        sale_code = f_s1.text_input("🏷️ ရောင်းထွက် Code *", placeholder="ဥပမာ - G16-R025")
+        voucher_no = f_s2.text_input("🧾 ဘောက်ချာ နံပါတ်", placeholder="ဥပမာ - V-001")
         
+        f_s3, f_s4 = st.columns(2)
+        sale_qty = f_s3.number_input("အရေအတွက် *", min_value=1, value=1, step=1)
+        sale_note = f_s4.text_input("မှတ်ချက်", placeholder="မှတ်ချက်")
+        
+        submit_sale = st.form_submit_button("➕ အရောင်းစာရင်း ထည့်မည်")
         if submit_sale:
-            if s_k == 0 and s_p == 0 and s_y == 0 and sale_qty == 0:
-                st.warning("အချက်အလက် ထည့်သွင်းပေးပါ!")
+            clean_code = sale_code.strip()
+            existing_active_codes = [s["Code နံပါတ်"] for s in st.session_state.sales_list if s["status"] == "ACTIVE"]
+            if not clean_code:
+                st.warning("⚠️ Code နံပါတ် ထည့်သွင်းပေးပါ!")
+            elif clean_code in existing_active_codes:
+                st.error(f"❌ Code နံပါတ် '{clean_code}' သည် ထည့်သွင်းပြီးသား ဖြစ်နေပါသည်!")
             else:
                 st.session_state.sales_list.append({
                     "id": len(st.session_state.sales_list) + 1,
                     "ရက်စွဲ": str(audit_date),
-                    "အမျိုးအစား": f"အရောင်း ({item_type})",
-                    "ဘောက်ချာ/မှတ်ချက်": v_no if v_no else "V-001",
-                    "အရေအတွက်": sale_qty,
-                    "ကျပ်သား": s_k, "ပဲ": s_p, "ရွဲ": s_y,
-                    "total_r": to_rupe(s_k, s_p, s_y),
+                    "ဘောက်ချာနံပါတ်": voucher_no.strip() if voucher_no.strip() else "V-001",
+                    "Code နံပါတ်": clean_code,
+                    "အဓိကအမျိုးအစား": sale_main_cat,
+                    "ခွဲအမျိုးအစား": sale_sub_cat,
+                    "ပစ္စည်းအမည်": sale_item_name,
+                    "အရေအတွက်": int(sale_qty),
+                    "မှတ်ချက်": sale_note.strip() if sale_note.strip() else "-",
                     "status": "ACTIVE"
                 })
+                st.session_state.flash_msg = f"✅ Code '{clean_code}' အရောင်းစာရင်း သိမ်းဆည်းပြီးပါပြီ။"
                 st.rerun()
 
     if st.session_state.sales_list:
-        display_sales = [{
-            "ID": s["id"],
-            "ရက်စွဲ": s["ရက်စွဲ"],
-            "အမျိုးအစား": s["အမျိုးအစား"],
-            "ဘောက်ချာ/မှတ်ချက်": s["ဘောက်ချာ/မှတ်ချက်"],
-            "အရေအတွက်": s["အရေအတွက်"],
-            "ကျပ်သား": s["ကျပ်သား"], "ပဲ": s["ပဲ"], "ရွဲ": s["ရွဲ"],
-            "အခြေအနေ": s["status"]
-        } for s in st.session_state.sales_list]
-        st.dataframe(pd.DataFrame(display_sales), use_container_width=True)
-        
-        # ❌ Void Feature
-        v_ids = [s["id"] for s in st.session_state.sales_list if s["status"] == "ACTIVE"]
-        if v_ids:
-            selected_void_id = st.selectbox("ပယ်ဖျက်မည့် ဘောက်ချာ ID ကို ရွေးပါ", v_ids, key="void_select")
-            if st.button("⚠️ ရွေးချယ်ထားသော ဘောက်ချာကို ပယ်ဖျက်မည် (Void)", key="void_btn"):
+        st.markdown("**📋 ယနေ့ ရောင်းထွက် Code စာရင်းများ**")
+        st.dataframe(pd.DataFrame(st.session_state.sales_list), use_container_width=True, hide_index=True)
+        active_sale_ids = [s["id"] for s in st.session_state.sales_list if s["status"] == "ACTIVE"]
+        if active_sale_ids:
+            v_s_col1, v_s_col2 = st.columns([2, 1])
+            void_sale_id = v_s_col1.selectbox("ပယ်ဖျက်မည့် အရောင်း ID", active_sale_ids, key="void_sale_select")
+            if v_s_col2.button("⚠️ အရောင်း Void", key="void_sale_btn"):
                 for s in st.session_state.sales_list:
-                    if s["id"] == selected_void_id:
+                    if s["id"] == void_sale_id:
                         s["status"] = "VOIDED"
-                        s["ကျပ်သား"] = 0; s["ပဲ"] = 0; s["ရွဲ"] = 0; s["အရေအတွက်"] = 0; s["total_r"] = 0
-                st.success(f"✅ ဘောက်ချာ ID #{selected_void_id} ကို ပယ်ဖျက်ပြီးပါပြီ။")
+                        s["အရေအတွက်"] = 0
+                st.session_state.flash_msg = f"✅ အရောင်း ID #{void_sale_id} ကို Void လုပ်ပြီးပါပြီ။"
                 st.rerun()
 
-# စုစုပေါင်း တွက်ချက်ခြင်း
-total_in_r = sum(item["total_r"] for item in st.session_state.inflow_list if item.get("status") == "ACTIVE")
-total_sold_r = sum(item["total_r"] for item in st.session_state.sales_list if item.get("status") == "ACTIVE")
-total_in_qty = sum(item["အရေအတွက်"] for item in st.session_state.inflow_list if item.get("status") == "ACTIVE")
-total_sold_qty = sum(item["အရေအတွက်"] for item in st.session_state.sales_list if item.get("status") == "ACTIVE")
-
-in_tot_k, in_tot_p, in_tot_y = from_rupe(total_in_r)
-sold_tot_k, sold_tot_p, sold_tot_y = from_rupe(total_sold_r)
-
-st.info(f"📊 **စုစုပေါင်း အဝင်:** {format_weight(in_tot_k, in_tot_p, in_tot_y)} ({total_in_qty} ထည်)  |  **စုစုပေါင်း ရောင်းထွက်:** {format_weight(sold_tot_k, sold_tot_p, sold_tot_y)} ({total_sold_qty} ထည်)")
 st.markdown("---")
 
-# --- အပိုင်း (၄) ညနေ ဆိုင်ပိတ်ချိန် စစ်ဆေးခြင်း ---
-st.subheader("🔍 ၄။ ညနေ ဆိုင်ပိတ်ချိန် လက်တွေ့စစ်ဆေးချက် (Actual Count)")
-act_col1, act_col2, act_col3, act_col4 = st.columns(4)
-with act_col1:
-    act_k = st.number_input("ကျပ်သား (လက်တွေ့)", min_value=0, value=0, key="act_k_input")
-with act_col2:
-    act_p = st.number_input("ပဲ (လက်တွေ့)", min_value=0, max_value=15, value=0, key="act_p_input")
-with act_col3:
-    act_y = st.number_input("ရွဲ (လက်တွေ့)", min_value=0, max_value=7, value=0, key="act_y_input")
-with act_col4:
-    act_items = st.number_input("လက်တွေ့ အထည်အရေအတွက်", min_value=0, value=0, key="act_items_input")
+# ==========================================
+# အပိုင်း (၄) ညနေ ဆိုင်ပိတ်ချိန် လက်တွေ့လက်ကျန် စစ်ဆေးခြင်း
+# ==========================================
+st.subheader("🔍 ၄။ ညနေ ဆိုင်ပိတ်ချိန် လက်တွေ့လက်ကျန် စစ်ဆေးရန် (Closing Count)")
 
-op_r = to_rupe(op_k, op_p, op_y)
-act_r = to_rupe(act_k, act_p, act_y)
-expected_r = op_r + total_in_r - total_sold_r
-diff_r = act_r - expected_r
+tab_act1, tab_act2, tab_act3 = st.tabs(["💎 စိန် (လက်တွေ့လက်ကျန်)", "🪙 ရွှေ ၁၅/၁၆ ပဲရည် (လက်တွေ့လက်ကျန်)", "⚪ ပလက်တီနမ် (လက်တွေ့လက်ကျန်)"])
 
-expected_items = op_items + total_in_qty - total_sold_qty
-diff_items = act_items - expected_items
+with tab_act1:
+    sein_mask = st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "စိန်"
+    edited_sein_act = st.data_editor(
+        st.session_state.opening_stock_df[sein_mask][["ပစ္စည်းအမည်", "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"]],
+        column_config=act_col_config, hide_index=True, use_container_width=True, key="editor_act_sein"
+    )
+    st.session_state.opening_stock_df.loc[sein_mask, "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"] = edited_sein_act["ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
 
-exp_k, exp_p, exp_y = from_rupe(abs(expected_r))
-d_k, d_p, d_y = from_rupe(abs(diff_r))
+with tab_act2:
+    ga1, ga2 = st.columns(2)
+    with ga1:
+        st.markdown("**🔸 ၁၅ ပဲရည် လက်တွေ့လက်ကျန်**")
+        g15_mask = (st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "ရွှေ") & (st.session_state.opening_stock_df["ခွဲအမျိုးအစား"] == "၁၅ ပဲရည်")
+        edited_g15_act = st.data_editor(
+            st.session_state.opening_stock_df[g15_mask][["ပစ္စည်းအမည်", "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"]],
+            column_config=act_col_config, hide_index=True, use_container_width=True, key="editor_act_g15"
+        )
+        st.session_state.opening_stock_df.loc[g15_mask, "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"] = edited_g15_act["ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
+    with ga2:
+        st.markdown("**🔸 ၁၆ ပဲရည် လက်တွေ့လက်ကျန်**")
+        g16_mask = (st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "ရွှေ") & (st.session_state.opening_stock_df["ခွဲအမျိုးအစား"] == "၁၆ ပဲရည်")
+        edited_g16_act = st.data_editor(
+            st.session_state.opening_stock_df[g16_mask][["ပစ္စည်းအမည်", "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"]],
+            column_config=act_col_config, hide_index=True, use_container_width=True, key="editor_act_g16"
+        )
+        st.session_state.opening_stock_df.loc[g16_mask, "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"] = edited_g16_act["ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
+
+with tab_act3:
+    plat_mask = st.session_state.opening_stock_df["အဓိကအမျိုးအစား"] == "ပလက်တီနမ်"
+    edited_plat_act = st.data_editor(
+        st.session_state.opening_stock_df[plat_mask][["ပစ္စည်းအမည်", "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"]],
+        column_config=act_col_config, hide_index=True, use_container_width=True, key="editor_act_plat"
+    )
+    st.session_state.opening_stock_df.loc[plat_mask, "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"] = edited_plat_act["ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"].fillna(0).astype(int).values
 
 st.markdown("---")
-st.subheader("🤖 စာရင်းစစ် အမှားရှာဖွေရေး အစီရင်ခံစာ & AI အကြံပြုချက်များ (Error Diagnosis & AI Recommendations)")
 
-st.write(f"📌 **ရှိသင့်သော လက်ကျန်:** `{' - ' if expected_r < 0 else ''}{format_weight(exp_k, exp_p, exp_y)}` ({expected_items} ထည်)")
-st.write(f"📌 **လက်တွေ့ ရှိသော လက်ကျန်:** `{format_weight(act_k, act_p, act_y)}` ({act_items} ထည်)")
+# ==========================================
+# အပိုင်း (၅) Data Processing & Audit Calculation
+# ==========================================
+st.subheader("📊 ၅။ Data Processing နှင့် လက်ကျန်စာရင်းပေါင်းချုပ်")
 
-# 🧠 Smart AI Diagnosis & Recommendations Logic
-if diff_r == 0 and diff_items == 0:
-    st.success("✅ စာရင်းများ အပြည့်အစုံ ကိုက်ညီပါသည်။ မည်သည့် အမှားအယွင်းမှ မရှိပါ။")
-    result_status = "MATCHED (စာရင်းကိုက်ညီသည်)"
-    diff_text = "0"
-else:
-    st.error("⚠️ **တွေ့ရှိချက် - စာရင်း မကိုက်ညီပါ!**")
+audit_df = st.session_state.opening_stock_df.copy()
+
+inflow_totals = []
+sales_totals = []
+expected_totals = []
+diff_totals = []
+status_labels = []
+
+for idx, row in audit_df.iterrows():
+    m_cat = row["အဓိကအမျိုးအစား"]
+    s_cat = row["ခွဲအမျိုးအစား"]
+    i_name = row["ပစ္စည်းအမည်"]
+    op_q = int(row["မနက်လက်ကျန် (အရေအတွက်)"])
+    act_q = int(row["ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)"])
     
-    if expected_r < 0:
-        st.warning("💡 **AI အကြံပြုချက် (Root-cause Warning):** ရှိသင့်သောလက်ကျန်တွင် အနှုတ်လက္ခဏာ (`-`) ထွက်နေပါသည်။ မနက်ခင်း ဖွင့်ပွဲလက်ကျန် (Opening Stock) ထည့်သွင်းမှု နည်းနေခြင်း (သို့မဟုတ်) ရောင်းထွက်စာရင်း အလွန်အကျွံ မှားယွင်းရိုက်ထည့်မိခြင်း ရှိမရှိ စစ်ဆေးပါ။")
-
-    if diff_r < 0:
-        st.markdown(f"* ❌ **အလေးချိန် လိုနေသည် (Shortage):** `{format_weight(d_k, d_p, d_y)}`")
-        st.info("💡 **AI ၏ အကြံပြုချက် (Recommendations):**\n1. အရောင်းဘောက်ချာ တစ်ခုခု ရိုက်ထည့်ရန် ကျန်နေနိုင်ပါသည် (သို့မဟုတ်) ပမာဏပိုမှားရိုက်မိထားနိုင်ပါသည်။\n2. ဖောက်သည်ထံမှ ပစ္စည်းအာမခံ/ပေါင်နှံထားသည်များကို ပြန်လည်စစ်ဆေးပါ။")
-        result_status = "SHORTAGE (အလေးချိန် လိုနေသည်)"
-        diff_text = f"- {format_weight(d_k, d_p, d_y)}"
-    elif diff_r > 0:
-        st.markdown(f"* ⚠️ **အလေးချိန် ပိုနေသည် (Excess):** `{format_weight(d_k, d_p, d_y)}`")
-        st.info("💡 **AI ၏ အကြံပြုချက် (Recommendations):**\n1. ပစ္စည်းအသစ်အဝင် (Inflow) စာရင်းသွင်းစဉ် အလေးချိန် သို့မဟုတ် အရေအတွက် ပိုမိုရိုက်ထည့်မိခြင်း ရှိမရှိ စစ်ဆေးပါ။\n2. မနက်ခင်း ဖွင့်ပွဲလက်ကျန် (Opening Stock) ကို အတိုးအလျှော့ မှားယွင်းရိုက်မိခြင်း ရှိမရှိ ပြန်လည်စစ်ဆေးပါ။")
-        result_status = "EXCESS (အလေးချိန် ပိုနေသည်)"
-        diff_text = f"+ {format_weight(d_k, d_p, d_y)}"
+    in_q = sum(
+        item["အရေအတွက်"] for item in st.session_state.inflow_list
+        if item["status"] == "ACTIVE" and item["အဓိကအမျိုးအစား"] == m_cat and item["ခွဲအမျိုးအစား"] == s_cat and item["ပစ္စည်းအမည်"] == i_name
+    )
+    out_q = sum(
+        s["အရေအတွက်"] for s in st.session_state.sales_list
+        if s["status"] == "ACTIVE" and s["အဓိကအမျိုးအစား"] == m_cat and s["ခွဲအမျိုးအစား"] == s_cat and s["ပစ္စည်းအမည်"] == i_name
+    )
+    
+    exp_q = op_q + in_q - out_q
+    diff_q = act_q - exp_q
+    
+    if diff_q == 0:
+        st_label = "✅ ကိုက်ညီသည် (MATCHED)"
+    elif diff_q < 0:
+        st_label = f"❌ လိုနေသည် ({diff_q})"
     else:
-        diff_text = "0"
-    
-    if diff_items != 0:
-        st.markdown(f"* 📦 **အထည်အရေအတွက် ကွာခြားချက်:** `{abs(diff_items)} ထည်` {'လျော့နည်းနေသည်' if diff_items < 0 else 'ပိုနေသည်'}")
+        st_label = f"⚠️ ပိုနေသည် (+{diff_q})"
+        
+    inflow_totals.append(in_q)
+    sales_totals.append(out_q)
+    expected_totals.append(exp_q)
+    diff_totals.append(diff_q)
+    status_labels.append(st_label)
+
+audit_df["ယနေ့အဝင် (ပန်းထိမ်ဆရာ)"] = inflow_totals
+audit_df["ယနေ့ရောင်းထွက်"] = sales_totals
+audit_df["ရှိသင့်သောလက်ကျန်"] = expected_totals
+audit_df["ကွာဟချက်"] = diff_totals
+audit_df["စစ်ဆေးချက်ရလဒ်"] = status_labels
+
+audit_df = audit_df[[
+    "အဓိကအမျိုးအစား", "ခွဲအမျိုးအစား", "ပစ္စည်းအမည်",
+    "မနက်လက်ကျန် (အရေအတွက်)", "ယနေ့အဝင် (ပန်းထိမ်ဆရာ)", "ယနေ့ရောင်းထွက်",
+    "ရှိသင့်သောလက်ကျန်", "ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)", "ကွာဟချက်", "စစ်ဆေးချက်ရလဒ်"
+]]
+
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("☀️ မနက်လက်ကျန်", f"{audit_df['မနက်လက်ကျန် (အရေအတွက်)'].sum()} ခု")
+m2.metric("📥 ပန်းထိမ်ဆရာအဝင်", f"{audit_df['ယနေ့အဝင် (ပန်းထိမ်ဆရာ)'].sum()} ခု")
+m3.metric("📤 ရောင်းထွက်အား", f"{audit_df['ယနေ့ရောင်းထွက်'].sum()} ခု")
+m4.metric("📌 ရှိသင့်လက်ကျန်", f"{audit_df['ရှိသင့်သောလက်ကျန်'].sum()} ခု")
+m5.metric("🔍 လက်တွေ့လက်ကျန်", f"{audit_df['ညနေလက်တွေ့လက်ကျန် (အရေအတွက်)'].sum()} ခု")
+
+st.markdown("### 📋 အမျိုးအစားအလိုက် လက်ကျန်စာရင်းပေါင်းချုပ် ဇယား")
+st.dataframe(audit_df, use_container_width=True, hide_index=True)
+
+mismatched_df = audit_df[audit_df["ကွာဟချက်"] != 0]
+if mismatched_df.empty:
+    st.success("✅ **Data Processing Diagnosis:** စာရင်းများအားလုံး ၁၀၀% ကိုက်ညီပါသည်။")
+else:
+    st.error(f"⚠️ **Data Processing Diagnosis:** စာရင်းမကိုက်ညီသော ပစ္စည်း ({len(mismatched_df)}) ခု တွေ့ရှိရပါသည်။")
 
 st.markdown("---")
 
-# --- အပိုင်း (၅) စာရင်းသိမ်းဆည်းခြင်းနှင့် Admin မှတ်တမ်း ---
-st.subheader("💾 ၅။ စာရင်းသိမ်းဆည်းရန်နှင့် အချက်အလက်များ")
+# ==========================================
+# အပိုင်း (၆) Excel Multi-sheet ဒေါင်းလုဒ်စနစ် & System Log
+# ==========================================
+st.subheader("💾 ၆။ Excel Multi-sheet အစီရင်ခံစာ ထုတ်ယူရန်")
 
-summary_data = {
-    "ရက်စွဲ": [str(audit_date)],
-    "တာဝန်ခံဝန်ထမ်း": [shop_owner],
-    "မနက်လက်ကျန်": [format_weight(op_k, op_p, op_y)],
-    "စုစုပေါင်းအဝင်": [format_weight(in_tot_k, in_tot_p, in_tot_y)],
-    "စုစုပေါင်းရောင်းထွက်": [format_weight(sold_tot_k, sold_tot_p, sold_tot_y)],
-    "ရှိသင့်သောလက်ကျန်": [f"- {format_weight(exp_k, exp_p, exp_y)}" if expected_r < 0 else format_weight(exp_k, exp_p, exp_y)],
-    "လက်တွေ့လက်ကျန်": [format_weight(act_k, act_p, act_y)],
-    "ကွာဟချက်": [diff_text],
-    "စစ်ဆေးချက်ရလဒ်": [result_status]
-}
-df_summary = pd.DataFrame(summary_data)
-csv_summary = df_summary.to_csv(index=False).encode('utf-8-sig')
+history_stock_file = "zwe_htet_stock_audit_history.csv"
+history_sales_file = "zwe_htet_sales_code_history.csv"
+history_artisan_file = "zwe_htet_artisan_inflow_history.csv"
 
-btn_col1, btn_col2 = st.columns(2)
-with btn_col1:
-    st.download_button(label="📥 နေ့စဉ်စာရင်းချုပ် (Excel/CSV) ဒေါင်းလုဒ်ဆွဲရန်", data=csv_summary, file_name=f"Zwe_Htet_Summary_{audit_date}.csv", mime="text/csv", key="download_csv_btn")
-
-with btn_col2:
-    history_file = "zwe_htet_audit_history.csv"
-    if st.button("💾 ဆိုင်မှတ်တမ်းသို့ သိမ်းမည် (Save to System Log)", type="primary", key="save_history_btn"):
-        if os.path.exists(history_file):
-            df_existing = pd.read_csv(history_file)
-            df_combined = pd.concat([df_existing, df_summary], ignore_index=True)
-            df_combined.to_csv(history_file, index=False, encoding='utf-8-sig')
+# Excel Multi-sheet ဖိုင်ထုတ်ပေးသည့် Function
+def create_excel_report():
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Sheet 1: Stock Summary
+        export_stock = audit_df.copy()
+        export_stock.insert(0, "ရက်စွဲ", str(audit_date))
+        export_stock.insert(1, "တာဝန်ခံ", shop_owner)
+        export_stock.to_excel(writer, sheet_name='Stock_Summary', index=False)
+        
+        # Sheet 2: Sales Code Report
+        if st.session_state.sales_list:
+            df_sales_exp = pd.DataFrame(st.session_state.sales_list)
         else:
-            df_summary.to_csv(history_file, index=False, encoding='utf-8-sig')
-        st.success("✅ စာရင်းချုပ် အချက်အလက်အပြည့်အစုံကို လုံခြုံစွာ သိမ်းဆည်းပြီးပါပြီ!")
+            df_sales_exp = pd.DataFrame(columns=["id", "ရက်စွဲ", "ဘောက်ချာနံပါတ်", "Code နံပါတ်", "အဓိကအမျိုးအစား", "ခွဲအမျိုးအစား", "ပစ္စည်းအမည်", "အရေအတွက်", "မှတ်ချက်", "status"])
+        df_sales_exp.to_excel(writer, sheet_name='Sales_Code_Report', index=False)
+        
+        # Sheet 3: Artisan Inflow Report
+        if st.session_state.inflow_list:
+            df_art_exp = pd.DataFrame(st.session_state.inflow_list)
+        else:
+            df_art_exp = pd.DataFrame(columns=["id", "ရက်စွဲ", "ပရိန်ဆရာအမည်", "Code နံပါတ်", "အဓိကအမျိုးအစား", "ခွဲအမျိုးအစား", "ပစ္စည်းအမည်", "အရေအတွက်", "မှတ်ချက်", "status"])
+        df_art_exp.to_excel(writer, sheet_name='Artisan_Inflow', index=False)
+        
+    processed_data = output.getvalue()
+    return processed_data
 
-# --- 🔐 FOUNDER / ADMIN SECURED SECTION ---
+excel_data = create_excel_report()
+
+col_dl, col_log = st.columns(2)
+with col_dl:
+    st.download_button(
+        label="📥 📊 နေ့စဉ်စာရင်းချုပ် (Excel Multi-sheet) ဒေါင်းလုဒ်ဆွဲရန်",
+        data=excel_data,
+        file_name=f"Zwe_Htet_Master_Report_{audit_date}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+with col_log:
+    if st.button("🚀 ယနေ့စာရင်းများကို Founder System Log သို့ သိမ်းဆည်းမည်", type="primary", use_container_width=True):
+        audit_export_df = audit_df.copy()
+        audit_export_df.insert(0, "ရက်စွဲ", str(audit_date))
+        audit_export_df.insert(1, "တာဝန်ခံဝန်ထမ်း", shop_owner)
+        
+        if os.path.exists(history_stock_file):
+            existing_stock = pd.read_csv(history_stock_file)
+            existing_stock = existing_stock[existing_stock["ရက်စွဲ"].astype(str) != str(audit_date)]
+            pd.concat([existing_stock, audit_export_df], ignore_index=True).to_csv(history_stock_file, index=False, encoding="utf-8-sig")
+        else:
+            audit_export_df.to_csv(history_stock_file, index=False, encoding="utf-8-sig")
+            
+        if st.session_state.sales_list:
+            df_s_log = pd.DataFrame(st.session_state.sales_list)
+            df_s_log["တာဝန်ခံဝန်ထမ်း"] = shop_owner
+            if os.path.exists(history_sales_file):
+                existing_sales = pd.read_csv(history_sales_file)
+                existing_sales = existing_sales[existing_sales["ရက်စွဲ"].astype(str) != str(audit_date)]
+                pd.concat([existing_sales, df_s_log], ignore_index=True).to_csv(history_sales_file, index=False, encoding="utf-8-sig")
+            else:
+                df_s_log.to_csv(history_sales_file, index=False, encoding="utf-8-sig")
+                
+        if st.session_state.inflow_list:
+            df_a_log = pd.DataFrame(st.session_state.inflow_list)
+            df_a_log["တာဝန်ခံဝန်ထမ်း"] = shop_owner
+            if os.path.exists(history_artisan_file):
+                existing_artisan = pd.read_csv(history_artisan_file)
+                existing_artisan = existing_artisan[existing_artisan["ရက်စွဲ"].astype(str) != str(audit_date)]
+                pd.concat([existing_artisan, df_a_log], ignore_index=True).to_csv(history_artisan_file, index=False, encoding="utf-8-sig")
+            else:
+                df_a_log.to_csv(history_artisan_file, index=False, encoding="utf-8-sig")
+                
+        st.success("✅ System Log သို့ အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!")
+
+# ==========================================
+# 🔐 FOUNDER / ADMIN SECURED AUDIT TRAIL
+# ==========================================
 st.markdown("---")
 if is_founder:
-    st.markdown("### 🔐 Founder သီးသန့် ဝင်ရောက်စစ်ဆေးသော မှတ်တမ်း (Secure Audit Trail)")
-    st.info("💡 သင်သည် Admin Password ဖြင့် အောင်မြင်စွာ ဝင်ထားသောကြောင့် နေ့စဉ်စာရင်းချုပ်များကို ကြည့်ရှုနိုင်ပါသည်။")
+    st.subheader("🔐 Founder သီးသန့် ဝင်ရောက်စစ်ဆေးသော မှတ်တမ်းချုပ်များ")
+    f_tab1, f_tab2, f_tab3 = st.tabs([
+        "📊 နေ့စဉ် လက်ကျန်စာရင်းပေါင်းချုပ် မှတ်တမ်း",
+        "🏷️ ရောင်းထွက် Code နံပါတ် မှတ်တမ်းချုပ်",
+        "👨‍🎨 ပန်းထိမ်ဆရာ ပစ္စည်းအဝင် မှတ်တမ်းချုပ်"
+    ])
     
-    if os.path.exists(history_file):
-        df_hist = pd.read_csv(history_file)
-        st.dataframe(df_hist, use_container_width=True)
-        
-        if st.button("🗑️ [Founder သီးသန့်] မှတ်တမ်းအားလုံးကို ရှင်းလင်းရန် (Reset Log)", key="founder_reset_btn"):
-            if os.path.exists(history_file):
-                os.remove(history_file)
-                st.success("✅ မှတ်တမ်းဟောင်းအားလုံးကို ရှင်းလင်းပြီးပါပြီ။")
-                st.rerun()
-    else:
-        st.warning("⚠️ သိမ်းဆည်းထားသော ဆိုင်မှတ်တမ်း ဖိုင် မရှိသေးပါ။")
+    with f_tab1:
+        if os.path.exists(history_stock_file):
+            st.dataframe(pd.read_csv(history_stock_file), use_container_width=True, hide_index=True)
+        else:
+            st.info("မှတ်တမ်း မရှိသေးပါ။")
+    with f_tab2:
+        if os.path.exists(history_sales_file):
+            st.dataframe(pd.read_csv(history_sales_file), use_container_width=True, hide_index=True)
+        else:
+            st.info("မှတ်တမ်း မရှိသေးပါ။")
+    with f_tab3:
+        if os.path.exists(history_artisan_file):
+            st.dataframe(pd.read_csv(history_artisan_file), use_container_width=True, hide_index=True)
+        else:
+            st.info("မှတ်တမ်း မရှိသေးပါ။")
+            
+    if st.button("🗑️ [Founder သီးသန့်] မှတ်တမ်းဟောင်းအားလုံး ရှင်းလင်းမည်"):
+        for f_path in [history_stock_file, history_sales_file, history_artisan_file]:
+            if os.path.exists(f_path):
+                os.remove(f_path)
+        st.session_state.flash_msg = "✅ မှတ်တမ်းများ ရှင်းလင်းပြီးပါပြီ။"
+        st.rerun()
 else:
-    st.info("🔒 **Admin / Founder မှတ်တမ်းများကို ကြည့်ရှုလိုပါက ဘယ်ဘက် Sidebar ရှိ Password များကို မှန်ကန်စွာ ထည့်သွင်းပါ။**")
+    st.info("🔒 **Founder မှတ်တမ်းများ ကြည့်ရှုရန် ဘယ်ဘက် Sidebar တွင် Admin Password ရိုက်ထည့်ပါ။**")
